@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::runner::{AgentKind, AgentSelection, Phase};
+use crate::runner::{AgentKind, AgentSelection, ExecutionMode, Phase};
 
 #[derive(Debug, Clone)]
 pub struct RunArtifacts {
@@ -14,10 +14,11 @@ pub struct RunArtifacts {
     pub run_dir: PathBuf,
     pub output_dir: PathBuf,
     pub summary_path: PathBuf,
+    pub working_dir: PathBuf,
 }
 
 impl RunArtifacts {
-    pub fn create(output_root: &Path, run_name: Option<&str>) -> Result<Self> {
+    pub fn create(output_root: &Path, working_dir: &Path, run_name: Option<&str>) -> Result<Self> {
         fs::create_dir_all(output_root)
             .with_context(|| format!("failed to create {}", output_root.display()))?;
 
@@ -39,6 +40,7 @@ impl RunArtifacts {
             run_id,
             output_dir: run_dir.clone(),
             summary_path: run_dir.join("run-summary.json"),
+            working_dir: working_dir.to_path_buf(),
             run_dir,
         })
     }
@@ -47,13 +49,18 @@ impl RunArtifacts {
         match phase {
             Phase::Prospect1 => self.run_dir.join("prospect1.md"),
             Phase::Prospect2 => self.run_dir.join("prospect2.md"),
-            Phase::Synthesis => self.run_dir.join("plan.md"),
+            Phase::Synthesis => self.plan_path(),
             Phase::Implementation => self.run_dir.join("implementation-report.md"),
         }
     }
 
-    pub fn prompt_path(&self, phase: Phase) -> PathBuf {
-        self.run_dir.join(format!("{}.prompt.md", phase.slug()))
+    pub fn prompt_path(&self, phase: Phase, execution_mode: ExecutionMode) -> PathBuf {
+        match (phase, execution_mode) {
+            (Phase::Implementation, ExecutionMode::PlanOnly) => {
+                self.working_dir.join("implementation.prompt.md")
+            }
+            _ => self.run_dir.join(format!("{}.prompt.md", phase.slug())),
+        }
     }
 
     pub fn stdout_log_path(&self, phase: Phase) -> PathBuf {
@@ -69,6 +76,10 @@ impl RunArtifacts {
             serde_json::to_string_pretty(summary).context("failed to serialize run summary")?;
         fs::write(&self.summary_path, content)
             .with_context(|| format!("failed to write {}", self.summary_path.display()))
+    }
+
+    pub fn plan_path(&self) -> PathBuf {
+        self.working_dir.join("plan.md")
     }
 }
 
@@ -87,6 +98,7 @@ pub struct RunSummary {
     pub task_file: PathBuf,
     pub working_dir: PathBuf,
     pub output_dir: PathBuf,
+    pub execution_mode: ExecutionMode,
     pub selected_agents: AgentSelection,
     pub heartbeat_interval_seconds: u64,
     pub total_phases: usize,
@@ -105,6 +117,7 @@ impl RunSummary {
         task_file: PathBuf,
         working_dir: PathBuf,
         output_dir: PathBuf,
+        execution_mode: ExecutionMode,
         selected_agents: AgentSelection,
     ) -> Self {
         Self {
@@ -113,9 +126,10 @@ impl RunSummary {
             task_file,
             working_dir,
             output_dir,
+            execution_mode,
             selected_agents,
             heartbeat_interval_seconds: 5,
-            total_phases: Phase::ALL.len(),
+            total_phases: execution_mode.phases().len(),
             completed_phases: 0,
             current_phase: None,
             current_phases: Vec::new(),
@@ -198,7 +212,7 @@ impl RunSummary {
     }
 
     fn refresh_progress(&mut self) {
-        self.total_phases = Phase::ALL.len();
+        self.total_phases = self.execution_mode.phases().len();
         self.completed_phases = self
             .phases
             .iter()
@@ -295,15 +309,22 @@ mod tests {
     #[test]
     fn creates_predictable_artifact_names() {
         let temp = tempdir().unwrap();
-        let artifacts = RunArtifacts::create(temp.path(), Some("My Run")).unwrap();
+        let artifacts = RunArtifacts::create(temp.path(), temp.path(), Some("My Run")).unwrap();
 
         assert_eq!(
             artifacts.output_path(Phase::Prospect1).file_name().unwrap(),
             "prospect1.md"
         );
         assert_eq!(
-            artifacts.prompt_path(Phase::Synthesis).file_name().unwrap(),
+            artifacts
+                .prompt_path(Phase::Synthesis, ExecutionMode::FullImplementation)
+                .file_name()
+                .unwrap(),
             "synthesis.prompt.md"
+        );
+        assert_eq!(
+            artifacts.output_path(Phase::Synthesis),
+            temp.path().join("plan.md")
         );
         assert!(artifacts.output_dir.exists());
     }

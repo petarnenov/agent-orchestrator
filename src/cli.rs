@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 
-use crate::runner::{AgentCliConfig, AgentKind, AgentSelection, Phase};
+use crate::runner::{AgentCliConfig, AgentKind, AgentSelection, ExecutionMode, Phase};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -72,6 +72,7 @@ pub struct ResolvedCli {
     pub working_dir: PathBuf,
     pub output_root: PathBuf,
     pub prompt_paths: PromptPaths,
+    pub execution_mode: ExecutionMode,
     pub agent_selection: AgentSelection,
     pub copilot: AgentCliConfig,
     pub claude: AgentCliConfig,
@@ -105,13 +106,14 @@ impl Cli {
             )?,
         };
         let output_root = resolve_output_root(&working_dir, self.output_dir)?;
-        let agent_selection = resolve_agent_selection()?;
+        let (execution_mode, agent_selection) = resolve_run_configuration()?;
 
         Ok(ResolvedCli {
             task_file,
             working_dir,
             output_root,
             prompt_paths,
+            execution_mode,
             agent_selection,
             copilot: AgentCliConfig::new(self.copilot_bin, self.copilot_args),
             claude: AgentCliConfig::new(self.claude_bin, self.claude_args),
@@ -181,14 +183,62 @@ fn validate_task_file(task_file: &Path) -> Result<()> {
     }
 }
 
-fn resolve_agent_selection() -> Result<AgentSelection> {
+fn resolve_run_configuration() -> Result<(ExecutionMode, AgentSelection)> {
     if io::stdin().is_terminal() && io::stdout().is_terminal() {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
         let mut reader = stdin.lock();
-        prompt_for_agent_selection(&mut reader, &mut stdout)
+        let execution_mode = prompt_for_execution_mode(&mut reader, &mut stdout)?;
+        let agent_selection = prompt_for_agent_selection(&mut reader, &mut stdout)?;
+        Ok((execution_mode, agent_selection))
     } else {
-        Ok(AgentSelection::legacy_default())
+        Ok((
+            ExecutionMode::legacy_default(),
+            AgentSelection::legacy_default(),
+        ))
+    }
+}
+
+fn prompt_for_execution_mode<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<ExecutionMode> {
+    loop {
+        writeln!(
+            writer,
+            "Select execution mode: [1] Plan only [2] Full implementation"
+        )
+        .context("failed to write execution mode prompt")?;
+        write!(writer, "> ").context("failed to write prompt marker")?;
+        writer.flush().context("failed to flush prompt marker")?;
+
+        let mut input = String::new();
+        let bytes = reader
+            .read_line(&mut input)
+            .context("failed to read execution mode selection")?;
+        if bytes == 0 {
+            bail!("interactive selection ended before execution mode was chosen");
+        }
+
+        match input.trim().to_ascii_lowercase().as_str() {
+            "1" | "plan" | "plan-only" | "plan_only" => return Ok(ExecutionMode::PlanOnly),
+            "2"
+            | "implement"
+            | "implementation"
+            | "full"
+            | "full-implementation"
+            | "full_implementation" => return Ok(ExecutionMode::FullImplementation),
+            _ => {
+                writeln!(
+                    writer,
+                    "Please choose 1/plan-only or 2/full-implementation."
+                )
+                .context("failed to write validation message")?;
+                writer
+                    .flush()
+                    .context("failed to flush validation message")?;
+            }
+        }
     }
 }
 
@@ -265,5 +315,15 @@ mod tests {
         assert_eq!(selection.prospect2, AgentKind::Claude);
         assert_eq!(selection.synthesis, AgentKind::Claude);
         assert_eq!(selection.implementation, AgentKind::Copilot);
+    }
+
+    #[test]
+    fn parses_execution_mode_prompt_answers() {
+        let mut input = Cursor::new("1\n");
+        let mut output = Vec::new();
+
+        let mode = prompt_for_execution_mode(&mut input, &mut output).unwrap();
+
+        assert_eq!(mode, ExecutionMode::PlanOnly);
     }
 }

@@ -11,23 +11,40 @@ CLI orchestrator for staged Copilot and Claude execution pipelines.
 3. synthesis
 4. implementation
 
-At startup, the CLI prompts you to choose which agent to use for each stage (`Copilot` or `Claude`).
+At startup, the CLI first prompts you to choose an execution mode:
 
-If the tool is started non-interactively, it falls back to the legacy default mapping:
+- `Plan only` - runs through synthesis, writes `plan.md` and `implementation.prompt.md` into the workspace root, and stops there
+- `Full implementation` - runs all four phases and writes `plan.md` into the workspace root before continuing to implementation
+
+It then prompts you to choose which agent to use for each stage (`Copilot` or `Claude`).
+
+If the tool is started non-interactively, it falls back to `Full implementation` and the legacy default mapping:
 `prospect1=Copilot`, `prospect2=Claude`, `synthesis=Claude`, `implementation=Copilot`.
 
-It persists prompts, outputs, logs, progress, and a structured `run-summary.json`.
+Final deliverables are written into the workspace root:
+
+- `plan.md` for both modes
+- `implementation.prompt.md` only for `Plan only`
+
+Run prompts, logs, prospect outputs, the implementation report, and `run-summary.json` are written into the generated run directory under `.agent-orchestrator-runs` unless `--output-dir` is set.
 
 ## Local usage
 
 ```bash
-cargo run -- sample-task.md
+cargo run -- sample-task.md --working-dir .
 ```
 
-Or with the compiled binary:
+Or with the compiled debug binary:
 
 ```bash
-./target/x86_64-apple-darwin/release/agent-orchestrator sample-task.md
+./target/debug/agent-orchestrator sample-task.md --working-dir .
+```
+
+Or after a release build:
+
+```bash
+cargo build --release
+./target/release/agent-orchestrator sample-task.md --working-dir .
 ```
 
 ## Homebrew

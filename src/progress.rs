@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::artifacts::ActivePhaseStatus;
-use crate::runner::{AgentKind, AgentSelection, Phase};
+use crate::runner::{AgentKind, AgentSelection, ExecutionMode, Phase};
 
 pub trait ProgressReporter {
     fn report(&mut self, event: ProgressEvent);
@@ -21,11 +21,13 @@ impl ProgressReporter for ConsoleProgressReporter {
             ProgressEvent::RunStarted {
                 task_file,
                 output_dir,
+                execution_mode,
                 total_phases,
                 selected_agents,
             } => {
                 println!("Starting task: {}", task_file.display());
                 println!("Artifacts: {}", output_dir.display());
+                println!("Execution mode: {execution_mode}");
                 println!(
                     "Agent selection: prospect1={}, prospect2={}, synthesis={}, implementation={}",
                     selected_agents.prospect1,
@@ -129,6 +131,7 @@ pub enum ProgressEvent {
     RunStarted {
         task_file: PathBuf,
         output_dir: PathBuf,
+        execution_mode: ExecutionMode,
         total_phases: usize,
         selected_agents: AgentSelection,
     },

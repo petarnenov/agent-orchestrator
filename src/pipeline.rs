@@ -59,12 +59,14 @@ impl<'a> Pipeline<'a> {
         let task_content = fs::read_to_string(&cli.task_file)
             .with_context(|| format!("failed to read {}", cli.task_file.display()))?;
         let templates = PromptTemplates::load(&cli.prompt_paths)?;
-        let artifacts = RunArtifacts::create(&cli.output_root, cli.run_name.as_deref())?;
+        let artifacts =
+            RunArtifacts::create(&cli.output_root, &cli.working_dir, cli.run_name.as_deref())?;
         let mut summary = RunSummary::new(
             artifacts.run_id.clone(),
             cli.task_file.clone(),
             cli.working_dir.clone(),
             artifacts.output_dir.clone(),
+            cli.execution_mode,
             cli.agent_selection,
         );
         summary.heartbeat_interval_seconds = self.heartbeat_interval.as_secs();
@@ -72,6 +74,7 @@ impl<'a> Pipeline<'a> {
         reporter.report(ProgressEvent::RunStarted {
             task_file: cli.task_file.clone(),
             output_dir: artifacts.output_dir.clone(),
+            execution_mode: cli.execution_mode,
             total_phases: summary.total_phases,
             selected_agents: cli.agent_selection,
         });
@@ -139,15 +142,25 @@ impl<'a> Pipeline<'a> {
             Phase::Synthesis,
             reporter,
         )?;
-        self.run_phase(
-            cli,
-            task_content,
-            templates,
-            artifacts,
-            summary,
-            Phase::Implementation,
-            reporter,
-        )?;
+        if cli.execution_mode.includes_implementation() {
+            self.run_phase(
+                cli,
+                task_content,
+                templates,
+                artifacts,
+                summary,
+                Phase::Implementation,
+                reporter,
+            )?;
+        } else {
+            self.prepare_phase_execution(
+                cli,
+                task_content,
+                templates,
+                artifacts,
+                Phase::Implementation,
+            )?;
+        }
 
         Ok(())
     }
@@ -275,7 +288,7 @@ impl<'a> Pipeline<'a> {
         phase: Phase,
     ) -> Result<PhaseExecution> {
         let output_path = artifacts.output_path(phase);
-        let prompt_path = artifacts.prompt_path(phase);
+        let prompt_path = artifacts.prompt_path(phase, cli.execution_mode);
         let prompt_context = PromptContext {
             task_file_path: cli.task_file.clone(),
             task_content: task_content.to_string(),
@@ -283,7 +296,7 @@ impl<'a> Pipeline<'a> {
             target_output_path: output_path.clone(),
             prospect1_path: artifacts.output_path(Phase::Prospect1),
             prospect2_path: artifacts.output_path(Phase::Prospect2),
-            plan_path: artifacts.output_path(Phase::Synthesis),
+            plan_path: artifacts.plan_path(),
         };
         let prompt = render_prompt(phase, templates, &prompt_context);
         fs::write(&prompt_path, &prompt)
@@ -507,7 +520,7 @@ mod tests {
 
     use super::*;
     use crate::cli::{PromptPaths, ResolvedCli};
-    use crate::runner::{AgentCliConfig, AgentResult};
+    use crate::runner::{AgentCliConfig, AgentResult, ExecutionMode};
 
     struct MockRunner {
         responses: Mutex<VecDeque<AgentResult>>,
@@ -607,6 +620,7 @@ mod tests {
                 synthesis,
                 implementation,
             },
+            execution_mode: ExecutionMode::FullImplementation,
             agent_selection: crate::runner::AgentSelection::legacy_default(),
             copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
             claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
@@ -646,9 +660,10 @@ mod tests {
 
         assert!(summary.output_dir.join("prospect1.md").exists());
         assert!(summary.output_dir.join("prospect2.md").exists());
-        assert!(summary.output_dir.join("plan.md").exists());
+        assert!(temp.path().join("plan.md").exists());
         assert!(summary.output_dir.join("implementation-report.md").exists());
         assert!(summary.output_dir.join("run-summary.json").exists());
+        assert_eq!(summary.execution_mode, ExecutionMode::FullImplementation);
         assert_eq!(summary.phases.len(), 4);
         assert_eq!(summary.completed_phases, 4);
         assert!(summary.current_phases.is_empty());
@@ -678,6 +693,7 @@ mod tests {
                 synthesis,
                 implementation,
             },
+            execution_mode: ExecutionMode::FullImplementation,
             agent_selection: crate::runner::AgentSelection::legacy_default(),
             copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
             claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
@@ -719,6 +735,7 @@ mod tests {
                 synthesis,
                 implementation,
             },
+            execution_mode: ExecutionMode::FullImplementation,
             agent_selection: crate::runner::AgentSelection::legacy_default(),
             copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
             claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
@@ -785,6 +802,7 @@ mod tests {
                 synthesis,
                 implementation,
             },
+            execution_mode: ExecutionMode::FullImplementation,
             agent_selection: crate::runner::AgentSelection::legacy_default(),
             copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
             claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
@@ -856,6 +874,7 @@ mod tests {
                 synthesis,
                 implementation,
             },
+            execution_mode: ExecutionMode::FullImplementation,
             agent_selection: crate::runner::AgentSelection::legacy_default(),
             copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
             claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
@@ -901,5 +920,66 @@ mod tests {
         pipeline.execute(&cli).unwrap();
 
         assert!(start.elapsed() < Duration::from_millis(350));
+    }
+
+    #[test]
+    fn plan_only_mode_stops_after_synthesis_and_persists_prompt() {
+        let temp = tempdir().unwrap();
+        let task_file = temp.path().join("task.md");
+        let brainstorm = temp.path().join("prompt-brainstorm.md");
+        let synthesis = temp.path().join("prompt-synthesis.md");
+        let implementation = temp.path().join("prompt-implementation.md");
+
+        fs::write(&task_file, "Build a CLI orchestrator").unwrap();
+        fs::write(&brainstorm, "Brainstorm {{TASK_CONTENT}}").unwrap();
+        fs::write(&synthesis, "Synthesize").unwrap();
+        fs::write(&implementation, "Implement from {{PLAN_PATH}}").unwrap();
+
+        let cli = ResolvedCli {
+            task_file,
+            working_dir: temp.path().to_path_buf(),
+            output_root: temp.path().join("runs"),
+            prompt_paths: PromptPaths {
+                brainstorm,
+                synthesis,
+                implementation,
+            },
+            execution_mode: ExecutionMode::PlanOnly,
+            agent_selection: crate::runner::AgentSelection::legacy_default(),
+            copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
+            claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
+            run_name: None,
+        };
+        let copilot = MockRunner::new(vec![AgentResult {
+            stdout: "copilot proposal".to_string(),
+            stderr: String::new(),
+            exit_code: Some(0),
+            success: true,
+        }]);
+        let claude = MockRunner::new(vec![
+            AgentResult {
+                stdout: "claude proposal".to_string(),
+                stderr: String::new(),
+                exit_code: Some(0),
+                success: true,
+            },
+            AgentResult {
+                stdout: "final plan".to_string(),
+                stderr: String::new(),
+                exit_code: Some(0),
+                success: true,
+            },
+        ]);
+
+        let pipeline = Pipeline::new(&copilot, &claude);
+        let summary = pipeline.execute(&cli).unwrap();
+
+        assert!(temp.path().join("plan.md").exists());
+        assert!(temp.path().join("implementation.prompt.md").exists());
+        assert!(!summary.output_dir.join("implementation-report.md").exists());
+        assert_eq!(summary.execution_mode, ExecutionMode::PlanOnly);
+        assert_eq!(summary.phases.len(), 3);
+        assert_eq!(summary.completed_phases, 3);
+        assert_eq!(summary.total_phases, 3);
     }
 }

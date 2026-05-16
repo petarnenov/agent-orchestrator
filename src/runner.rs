@@ -98,6 +98,51 @@ impl Phase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    PlanOnly,
+    FullImplementation,
+}
+
+impl ExecutionMode {
+    pub const PLAN_ONLY_PHASES: [Phase; 3] = [Phase::Prospect1, Phase::Prospect2, Phase::Synthesis];
+    pub const FULL_IMPLEMENTATION_PHASES: [Phase; 4] = [
+        Phase::Prospect1,
+        Phase::Prospect2,
+        Phase::Synthesis,
+        Phase::Implementation,
+    ];
+
+    pub fn legacy_default() -> Self {
+        Self::FullImplementation
+    }
+
+    pub fn phases(self) -> &'static [Phase] {
+        match self {
+            Self::PlanOnly => &Self::PLAN_ONLY_PHASES,
+            Self::FullImplementation => &Self::FULL_IMPLEMENTATION_PHASES,
+        }
+    }
+
+    pub fn includes_implementation(self) -> bool {
+        matches!(self, Self::FullImplementation)
+    }
+
+    pub fn prompt_label(self) -> &'static str {
+        match self {
+            Self::PlanOnly => "Plan only",
+            Self::FullImplementation => "Full implementation",
+        }
+    }
+}
+
+impl std::fmt::Display for ExecutionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.prompt_label())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct AgentSelection {
     pub prospect1: AgentKind,
     pub prospect2: AgentKind,
