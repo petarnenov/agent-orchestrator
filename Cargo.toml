@@ -1,0 +1,36 @@
+[package]
+name = "agent-orchestrator"
+version = "0.1.0"
+edition = "2024"
+description = "CLI orchestrator for Copilot and Claude execution pipelines"
+license = "MIT"
+repository = "https://github.com/petarnenov/agent-orchestrator"
+homepage = "https://github.com/petarnenov/agent-orchestrator"
+
+[dependencies]
+anyhow = "1.0.102"
+chrono = { version = "0.4.44", features = ["serde"] }
+clap = { version = "4.6.1", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+uuid = { version = "1.23.1", features = ["v4", "serde"] }
+
+[package.metadata.deb]
+maintainer = "Petar Nenov <petarnenov@users.noreply.github.com>"
+copyright = "2026, Petar Nenov"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+CLI orchestrator for Copilot and Claude execution pipelines with staged
+brainstorming, synthesis, implementation, artifact persistence, and progress reporting.
+"""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+  ["target/release/agent-orchestrator", "usr/bin/agent-orchestrator", "755"],
+  ["README.md", "usr/share/doc/agent-orchestrator/README.md", "644"],
+  ["LICENSE", "usr/share/doc/agent-orchestrator/LICENSE", "644"],
+]
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -1,0 +1,199 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build-${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            archive: agent-orchestrator-x86_64-apple-darwin.tar.gz
+            deb_arch: ""
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            archive: agent-orchestrator-aarch64-apple-darwin.tar.gz
+            deb_arch: ""
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive: agent-orchestrator-x86_64-unknown-linux-gnu.tar.gz
+            deb_arch: amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --locked --release --target "${{ matrix.target }}"
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/agent-orchestrator" dist/agent-orchestrator
+          tar -C dist -czf "dist/${{ matrix.archive }}" agent-orchestrator
+          rm dist/agent-orchestrator
+
+      - name: Build Debian package
+        if: matrix.deb_arch != ''
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist/pkgroot/DEBIAN
+          mkdir -p dist/pkgroot/usr/bin
+          mkdir -p dist/pkgroot/usr/share/doc/agent-orchestrator
+          cp "target/${{ matrix.target }}/release/agent-orchestrator" dist/pkgroot/usr/bin/agent-orchestrator
+          cp README.md dist/pkgroot/usr/share/doc/agent-orchestrator/README.md
+          cp LICENSE dist/pkgroot/usr/share/doc/agent-orchestrator/LICENSE
+          cat > dist/pkgroot/DEBIAN/control <<EOF
+          Package: agent-orchestrator
+          Version: ${VERSION#v}
+          Section: utils
+          Priority: optional
+          Architecture: ${{ matrix.deb_arch }}
+          Maintainer: Petar Nenov <petarnenov@users.noreply.github.com>
+          Description: CLI orchestrator for Copilot and Claude execution pipelines
+          EOF
+          dpkg-deb --build --root-owner-group dist/pkgroot \
+            "dist/agent-orchestrator_${VERSION#v}_${{ matrix.deb_arch }}.deb"
+          rm -rf dist/pkgroot
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  release:
+    name: publish-release
+    runs-on: ubuntu-24.04
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  publish-apt:
+    name: publish-apt
+    runs-on: ubuntu-24.04
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install APT repo tools
+        run: sudo apt-get update && sudo apt-get install -y apt-utils dpkg-dev gnupg
+
+      - name: Download Linux Debian package
+        uses: actions/download-artifact@v4
+        with:
+          name: x86_64-unknown-linux-gnu
+          path: dist
+
+      - name: Import repository signing key
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "$APT_GPG_PRIVATE_KEY" ]; then
+            echo "APT_GPG_PRIVATE_KEY secret is required" >&2
+            exit 1
+          fi
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          printf '%s' "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
+
+      - name: Build APT repository
+        run: |
+          chmod +x scripts/build-apt-repo.sh
+          mkdir -p site/apt
+          deb_file="$(find dist -name '*.deb' | head -n 1)"
+          scripts/build-apt-repo.sh \
+            "$deb_file" \
+            "site/apt" \
+            "https://petarnenov.github.io/agent-orchestrator/apt"
+
+      - name: Publish GitHub Pages content
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./site
+          force_orphan: true
+
+  update-homebrew:
+    name: update-homebrew-tap
+    runs-on: ubuntu-24.04
+    needs: release
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Update tap repository
+        env:
+          VERSION: ${{ github.ref_name }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN secret is required" >&2
+            exit 1
+          fi
+
+          intel_archive="dist/agent-orchestrator-x86_64-apple-darwin.tar.gz"
+          arm_archive="dist/agent-orchestrator-aarch64-apple-darwin.tar.gz"
+          intel_sha="$(sha256sum "$intel_archive" | awk '{print $1}')"
+          arm_sha="$(sha256sum "$arm_archive" | awk '{print $1}')"
+          intel_url="https://github.com/petarnenov/agent-orchestrator/releases/download/${VERSION}/agent-orchestrator-x86_64-apple-darwin.tar.gz"
+          arm_url="https://github.com/petarnenov/agent-orchestrator/releases/download/${VERSION}/agent-orchestrator-aarch64-apple-darwin.tar.gz"
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/petarnenov/homebrew-agent-orchestrator.git" tap-repo
+          chmod +x scripts/render-homebrew-formula.sh
+          scripts/render-homebrew-formula.sh \
+            "${VERSION#v}" \
+            "petarnenov" \
+            "agent-orchestrator" \
+            "$intel_url" \
+            "$intel_sha" \
+            "$arm_url" \
+            "$arm_sha" \
+            "tap-repo/Formula/agent-orchestrator.rb"
+
+          cd tap-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/agent-orchestrator.rb
+          git commit -m "Update agent-orchestrator ${VERSION}" || exit 0
+          git push origin HEAD:main
