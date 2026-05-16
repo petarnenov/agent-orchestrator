@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::artifacts::ActivePhaseStatus;
-use crate::runner::Phase;
+use crate::runner::{AgentKind, AgentSelection, Phase};
 
 pub trait ProgressReporter {
     fn report(&mut self, event: ProgressEvent);
@@ -22,20 +22,30 @@ impl ProgressReporter for ConsoleProgressReporter {
                 task_file,
                 output_dir,
                 total_phases,
+                selected_agents,
             } => {
                 println!("Starting task: {}", task_file.display());
                 println!("Artifacts: {}", output_dir.display());
+                println!(
+                    "Agent selection: prospect1={}, prospect2={}, synthesis={}, implementation={}",
+                    selected_agents.prospect1,
+                    selected_agents.prospect2,
+                    selected_agents.synthesis,
+                    selected_agents.implementation
+                );
                 println!("Progress: 0% (0/{total_phases})");
             }
             ProgressEvent::PhaseStarted {
                 phase,
+                agent,
                 phase_index,
                 total_phases,
                 progress_percent,
             } => {
                 println!(
-                    "[{phase_index}/{total_phases} | {progress_percent}%] Running {}...",
-                    phase.title()
+                    "[{phase_index}/{total_phases} | {progress_percent}%] Running {} with {}...",
+                    phase.title(),
+                    agent
                 );
             }
             ProgressEvent::Heartbeat {
@@ -60,28 +70,32 @@ impl ProgressReporter for ConsoleProgressReporter {
             }
             ProgressEvent::PhaseCompleted {
                 phase,
+                agent,
                 phase_index,
                 total_phases,
                 progress_percent,
                 output_path,
             } => {
                 println!(
-                    "[{phase_index}/{total_phases} | {progress_percent}%] Completed {} -> {} ({})",
+                    "[{phase_index}/{total_phases} | {progress_percent}%] Completed {} with {} -> {} ({})",
                     phase.title(),
+                    agent,
                     output_path.display(),
                     phase.output_description()
                 );
             }
             ProgressEvent::PhaseFailed {
                 phase,
+                agent,
                 phase_index,
                 total_phases,
                 progress_percent,
                 error,
             } => {
                 eprintln!(
-                    "[{phase_index}/{total_phases} | {progress_percent}%] Failed {}: {error}",
-                    phase.title()
+                    "[{phase_index}/{total_phases} | {progress_percent}%] Failed {} with {}: {error}",
+                    phase.title(),
+                    agent
                 );
             }
             ProgressEvent::RunCompleted {
@@ -116,9 +130,11 @@ pub enum ProgressEvent {
         task_file: PathBuf,
         output_dir: PathBuf,
         total_phases: usize,
+        selected_agents: AgentSelection,
     },
     PhaseStarted {
         phase: Phase,
+        agent: AgentKind,
         phase_index: usize,
         total_phases: usize,
         progress_percent: u8,
@@ -131,6 +147,7 @@ pub enum ProgressEvent {
     },
     PhaseCompleted {
         phase: Phase,
+        agent: AgentKind,
         phase_index: usize,
         total_phases: usize,
         progress_percent: u8,
@@ -138,6 +155,7 @@ pub enum ProgressEvent {
     },
     PhaseFailed {
         phase: Phase,
+        agent: AgentKind,
         phase_index: usize,
         total_phases: usize,
         progress_percent: u8,
@@ -174,8 +192,9 @@ fn format_active_phase(active_phase: &ActivePhaseStatus) -> String {
     };
 
     format!(
-        "{} elapsed {} ({})",
+        "{} with {} elapsed {} ({})",
         active_phase.phase.title(),
+        active_phase.agent,
         format_duration(active_phase.elapsed_seconds),
         last_activity
     )

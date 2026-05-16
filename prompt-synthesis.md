@@ -10,8 +10,8 @@ Task:
 {{TASK_CONTENT}}
 
 Inputs:
-- Copilot proposal: {{COPILOT_PROPOSAL_PATH}}
-- Claude proposal: {{CLAUDE_PROPOSAL_PATH}}
+- Prospect1 output: {{PROSPECT1_PATH}}
+- Prospect2 output: {{PROSPECT2_PATH}}
 
 Your goal:
 Create a single high-quality implementation plan that is clear enough for another agent to implement without guessing.

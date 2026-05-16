@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::runner::{AgentKind, Phase};
+use crate::runner::{AgentKind, AgentSelection, Phase};
 
 #[derive(Debug, Clone)]
 pub struct RunArtifacts {
@@ -45,10 +45,10 @@ impl RunArtifacts {
 
     pub fn output_path(&self, phase: Phase) -> PathBuf {
         match phase {
-            Phase::BrainstormCopilot => self.run_dir.join("proposal-copilot.md"),
-            Phase::BrainstormClaude => self.run_dir.join("proposal-claude.md"),
-            Phase::SynthesisClaude => self.run_dir.join("plan.md"),
-            Phase::ImplementationCopilot => self.run_dir.join("implementation-report.md"),
+            Phase::Prospect1 => self.run_dir.join("prospect1.md"),
+            Phase::Prospect2 => self.run_dir.join("prospect2.md"),
+            Phase::Synthesis => self.run_dir.join("plan.md"),
+            Phase::Implementation => self.run_dir.join("implementation-report.md"),
         }
     }
 
@@ -87,6 +87,7 @@ pub struct RunSummary {
     pub task_file: PathBuf,
     pub working_dir: PathBuf,
     pub output_dir: PathBuf,
+    pub selected_agents: AgentSelection,
     pub heartbeat_interval_seconds: u64,
     pub total_phases: usize,
     pub completed_phases: usize,
@@ -104,6 +105,7 @@ impl RunSummary {
         task_file: PathBuf,
         working_dir: PathBuf,
         output_dir: PathBuf,
+        selected_agents: AgentSelection,
     ) -> Self {
         Self {
             run_id,
@@ -111,6 +113,7 @@ impl RunSummary {
             task_file,
             working_dir,
             output_dir,
+            selected_agents,
             heartbeat_interval_seconds: 5,
             total_phases: Phase::ALL.len(),
             completed_phases: 0,
@@ -126,6 +129,7 @@ impl RunSummary {
     pub fn begin_phase(
         &mut self,
         phase: Phase,
+        agent: AgentKind,
         prompt_file: PathBuf,
         output_file: PathBuf,
         stdout_log: PathBuf,
@@ -133,7 +137,7 @@ impl RunSummary {
     ) {
         self.phases.push(PhaseSummary {
             phase,
-            agent: phase.agent(),
+            agent,
             status: PhaseStatus::Running,
             prompt_file,
             output_file,
@@ -218,6 +222,7 @@ impl RunSummary {
 #[derive(Debug, Clone)]
 pub struct ActivePhaseStatus {
     pub phase: Phase,
+    pub agent: AgentKind,
     pub elapsed_seconds: u64,
     pub last_activity_seconds: Option<u64>,
     pub last_activity_message: Option<String>,
@@ -230,6 +235,7 @@ impl RunSummary {
             .filter(|phase| matches!(phase.status, PhaseStatus::Running))
             .map(|phase| ActivePhaseStatus {
                 phase: phase.phase,
+                agent: phase.agent,
                 elapsed_seconds: elapsed_seconds(phase.started_at, now),
                 last_activity_seconds: phase
                     .last_activity_at
@@ -292,18 +298,12 @@ mod tests {
         let artifacts = RunArtifacts::create(temp.path(), Some("My Run")).unwrap();
 
         assert_eq!(
-            artifacts
-                .output_path(Phase::BrainstormCopilot)
-                .file_name()
-                .unwrap(),
-            "proposal-copilot.md"
+            artifacts.output_path(Phase::Prospect1).file_name().unwrap(),
+            "prospect1.md"
         );
         assert_eq!(
-            artifacts
-                .prompt_path(Phase::SynthesisClaude)
-                .file_name()
-                .unwrap(),
-            "synthesis-claude.prompt.md"
+            artifacts.prompt_path(Phase::Synthesis).file_name().unwrap(),
+            "synthesis.prompt.md"
         );
         assert!(artifacts.output_dir.exists());
     }

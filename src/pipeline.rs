@@ -10,7 +10,7 @@ use crate::artifacts::{RunArtifacts, RunSummary};
 use crate::cli::ResolvedCli;
 use crate::progress::{NoopProgressReporter, ProgressEvent, ProgressReporter};
 use crate::prompt::{PromptContext, PromptTemplates, render_prompt};
-use crate::runner::{AgentRequest, AgentRunner, Phase};
+use crate::runner::{AgentKind, AgentRequest, AgentRunner, Phase};
 
 pub struct Pipeline<'a> {
     copilot: &'a dyn AgentRunner,
@@ -65,6 +65,7 @@ impl<'a> Pipeline<'a> {
             cli.task_file.clone(),
             cli.working_dir.clone(),
             artifacts.output_dir.clone(),
+            cli.agent_selection,
         );
         summary.heartbeat_interval_seconds = self.heartbeat_interval.as_secs();
         artifacts.persist_summary(&summary)?;
@@ -72,6 +73,7 @@ impl<'a> Pipeline<'a> {
             task_file: cli.task_file.clone(),
             output_dir: artifacts.output_dir.clone(),
             total_phases: summary.total_phases,
+            selected_agents: cli.agent_selection,
         });
 
         let result = self.execute_inner(
@@ -125,7 +127,7 @@ impl<'a> Pipeline<'a> {
             templates,
             artifacts,
             summary,
-            &[Phase::BrainstormCopilot, Phase::BrainstormClaude],
+            &[Phase::Prospect1, Phase::Prospect2],
             reporter,
         )?;
         self.run_phase(
@@ -134,7 +136,7 @@ impl<'a> Pipeline<'a> {
             templates,
             artifacts,
             summary,
-            Phase::SynthesisClaude,
+            Phase::Synthesis,
             reporter,
         )?;
         self.run_phase(
@@ -143,7 +145,7 @@ impl<'a> Pipeline<'a> {
             templates,
             artifacts,
             summary,
-            Phase::ImplementationCopilot,
+            Phase::Implementation,
             reporter,
         )?;
 
@@ -162,13 +164,13 @@ impl<'a> Pipeline<'a> {
     ) -> Result<()> {
         let execution =
             self.prepare_phase_execution(cli, task_content, templates, artifacts, phase)?;
-        self.start_phase(&execution, summary, artifacts, reporter)?;
+        self.start_phase(cli, &execution, summary, artifacts, reporter)?;
         summary.update_phase_activity(phase, "agent process started");
         artifacts.persist_summary(summary)?;
 
         thread::scope(|scope| {
             let (sender, receiver) = mpsc::channel();
-            let runner = self.runner_for(phase);
+            let runner = self.runner_for(cli.agent_selection.for_phase(phase));
             let request = execution.request.clone();
             scope.spawn(move || {
                 let result = runner
@@ -185,10 +187,10 @@ impl<'a> Pipeline<'a> {
         })
     }
 
-    fn runner_for(&self, phase: Phase) -> &dyn AgentRunner {
-        match phase {
-            Phase::BrainstormCopilot | Phase::ImplementationCopilot => self.copilot,
-            Phase::BrainstormClaude | Phase::SynthesisClaude => self.claude,
+    fn runner_for(&self, agent: AgentKind) -> &dyn AgentRunner {
+        match agent {
+            AgentKind::Copilot => self.copilot,
+            AgentKind::Claude => self.claude,
         }
     }
 
@@ -210,7 +212,7 @@ impl<'a> Pipeline<'a> {
             .collect::<Result<Vec<_>>>()?;
 
         for execution in &executions {
-            self.start_phase(execution, summary, artifacts, reporter)?;
+            self.start_phase(cli, execution, summary, artifacts, reporter)?;
             summary.update_phase_activity(execution.phase, "agent process started");
         }
         artifacts.persist_summary(summary)?;
@@ -219,7 +221,7 @@ impl<'a> Pipeline<'a> {
         thread::scope(|scope| {
             for execution in &executions {
                 let sender = sender.clone();
-                let runner = self.runner_for(execution.phase);
+                let runner = self.runner_for(cli.agent_selection.for_phase(execution.phase));
                 let request = execution.request.clone();
                 let phase = execution.phase;
                 scope.spawn(move || {
@@ -279,9 +281,9 @@ impl<'a> Pipeline<'a> {
             task_content: task_content.to_string(),
             workspace_dir: cli.working_dir.clone(),
             target_output_path: output_path.clone(),
-            copilot_proposal_path: artifacts.output_path(Phase::BrainstormCopilot),
-            claude_proposal_path: artifacts.output_path(Phase::BrainstormClaude),
-            plan_path: artifacts.output_path(Phase::SynthesisClaude),
+            prospect1_path: artifacts.output_path(Phase::Prospect1),
+            prospect2_path: artifacts.output_path(Phase::Prospect2),
+            plan_path: artifacts.output_path(Phase::Synthesis),
         };
         let prompt = render_prompt(phase, templates, &prompt_context);
         fs::write(&prompt_path, &prompt)
@@ -305,13 +307,16 @@ impl<'a> Pipeline<'a> {
 
     fn start_phase(
         &self,
+        cli: &ResolvedCli,
         execution: &PhaseExecution,
         summary: &mut RunSummary,
         artifacts: &RunArtifacts,
         reporter: &mut dyn ProgressReporter,
     ) -> Result<()> {
+        let agent = cli.agent_selection.for_phase(execution.phase);
         summary.begin_phase(
             execution.phase,
+            agent,
             execution.prompt_path.clone(),
             execution.output_path.clone(),
             execution.stdout_log.clone(),
@@ -321,6 +326,7 @@ impl<'a> Pipeline<'a> {
         artifacts.persist_summary(summary)?;
         reporter.report(ProgressEvent::PhaseStarted {
             phase: execution.phase,
+            agent,
             phase_index: execution.phase_index,
             total_phases: summary.total_phases,
             progress_percent: summary.progress_percent,
@@ -358,6 +364,7 @@ impl<'a> Pipeline<'a> {
                     artifacts.persist_summary(summary)?;
                     reporter.report(ProgressEvent::PhaseFailed {
                         phase: execution.phase,
+                        agent: summary.selected_agents.for_phase(execution.phase),
                         phase_index: execution.phase_index,
                         total_phases: summary.total_phases,
                         progress_percent: summary.progress_percent,
@@ -373,6 +380,7 @@ impl<'a> Pipeline<'a> {
                     artifacts.persist_summary(summary)?;
                     reporter.report(ProgressEvent::PhaseFailed {
                         phase: execution.phase,
+                        agent: summary.selected_agents.for_phase(execution.phase),
                         phase_index: execution.phase_index,
                         total_phases: summary.total_phases,
                         progress_percent: summary.progress_percent,
@@ -389,6 +397,7 @@ impl<'a> Pipeline<'a> {
                 artifacts.persist_summary(summary)?;
                 reporter.report(ProgressEvent::PhaseCompleted {
                     phase: execution.phase,
+                    agent: summary.selected_agents.for_phase(execution.phase),
                     phase_index: execution.phase_index,
                     total_phases: summary.total_phases,
                     progress_percent: summary.progress_percent,
@@ -406,6 +415,7 @@ impl<'a> Pipeline<'a> {
                 artifacts.persist_summary(summary)?;
                 reporter.report(ProgressEvent::PhaseFailed {
                     phase: execution.phase,
+                    agent: summary.selected_agents.for_phase(execution.phase),
                     phase_index: execution.phase_index,
                     total_phases: summary.total_phases,
                     progress_percent: summary.progress_percent,
@@ -564,10 +574,7 @@ mod tests {
 
     impl AgentRunner for DelayedRunner {
         fn run(&self, request: &AgentRequest) -> Result<AgentResult> {
-            if matches!(
-                request.phase,
-                Phase::BrainstormCopilot | Phase::BrainstormClaude
-            ) {
+            if matches!(request.phase, Phase::Prospect1 | Phase::Prospect2) {
                 std::thread::sleep(self.delay);
             }
             self.inner.run(request)
@@ -600,6 +607,7 @@ mod tests {
                 synthesis,
                 implementation,
             },
+            agent_selection: crate::runner::AgentSelection::legacy_default(),
             copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
             claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
             run_name: Some("test-run".to_string()),
@@ -636,8 +644,8 @@ mod tests {
         let pipeline = Pipeline::new(&copilot, &claude);
         let summary = pipeline.execute(&cli).unwrap();
 
-        assert!(summary.output_dir.join("proposal-copilot.md").exists());
-        assert!(summary.output_dir.join("proposal-claude.md").exists());
+        assert!(summary.output_dir.join("prospect1.md").exists());
+        assert!(summary.output_dir.join("prospect2.md").exists());
         assert!(summary.output_dir.join("plan.md").exists());
         assert!(summary.output_dir.join("implementation-report.md").exists());
         assert!(summary.output_dir.join("run-summary.json").exists());
@@ -670,6 +678,7 @@ mod tests {
                 synthesis,
                 implementation,
             },
+            agent_selection: crate::runner::AgentSelection::legacy_default(),
             copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
             claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
             run_name: None,
@@ -710,6 +719,7 @@ mod tests {
                 synthesis,
                 implementation,
             },
+            agent_selection: crate::runner::AgentSelection::legacy_default(),
             copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
             claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
             run_name: None,
@@ -750,7 +760,7 @@ mod tests {
         let events = reporter.events.lock().unwrap();
         assert!(events.iter().any(|event| event == "run_started"));
         assert!(events.iter().any(|event| event == "run_completed"));
-        assert!(events.iter().any(|event| event == "brainstorm-copilot"));
+        assert!(events.iter().any(|event| event == "prospect1"));
     }
 
     #[test]
@@ -775,6 +785,7 @@ mod tests {
                 synthesis,
                 implementation,
             },
+            agent_selection: crate::runner::AgentSelection::legacy_default(),
             copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
             claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
             run_name: None,
@@ -845,6 +856,7 @@ mod tests {
                 synthesis,
                 implementation,
             },
+            agent_selection: crate::runner::AgentSelection::legacy_default(),
             copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
             claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
             run_name: None,

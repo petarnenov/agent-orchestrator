@@ -1,11 +1,12 @@
 use std::env;
 use std::ffi::OsStr;
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 
-use crate::runner::AgentCliConfig;
+use crate::runner::{AgentCliConfig, AgentKind, AgentSelection, Phase};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -71,6 +72,7 @@ pub struct ResolvedCli {
     pub working_dir: PathBuf,
     pub output_root: PathBuf,
     pub prompt_paths: PromptPaths,
+    pub agent_selection: AgentSelection,
     pub copilot: AgentCliConfig,
     pub claude: AgentCliConfig,
     pub run_name: Option<String>,
@@ -103,12 +105,14 @@ impl Cli {
             )?,
         };
         let output_root = resolve_output_root(&working_dir, self.output_dir)?;
+        let agent_selection = resolve_agent_selection()?;
 
         Ok(ResolvedCli {
             task_file,
             working_dir,
             output_root,
             prompt_paths,
+            agent_selection,
             copilot: AgentCliConfig::new(self.copilot_bin, self.copilot_args),
             claude: AgentCliConfig::new(self.claude_bin, self.claude_args),
             run_name: self.run_name,
@@ -177,13 +181,89 @@ fn validate_task_file(task_file: &Path) -> Result<()> {
     }
 }
 
+fn resolve_agent_selection() -> Result<AgentSelection> {
+    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        let stdin = io::stdin();
+        let mut stdout = io::stdout();
+        let mut reader = stdin.lock();
+        prompt_for_agent_selection(&mut reader, &mut stdout)
+    } else {
+        Ok(AgentSelection::legacy_default())
+    }
+}
+
+fn prompt_for_agent_selection<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<AgentSelection> {
+    writeln!(writer, "Select agent for each stage:").context("failed to write selection prompt")?;
+    writer.flush().context("failed to flush selection prompt")?;
+
+    Ok(AgentSelection {
+        prospect1: prompt_for_agent(reader, writer, Phase::Prospect1)?,
+        prospect2: prompt_for_agent(reader, writer, Phase::Prospect2)?,
+        synthesis: prompt_for_agent(reader, writer, Phase::Synthesis)?,
+        implementation: prompt_for_agent(reader, writer, Phase::Implementation)?,
+    })
+}
+
+fn prompt_for_agent<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    phase: Phase,
+) -> Result<AgentKind> {
+    loop {
+        writeln!(writer, "{} agent? [1] Copilot [2] Claude", phase.title())
+            .with_context(|| format!("failed to write {} prompt", phase.slug()))?;
+        write!(writer, "> ").context("failed to write prompt marker")?;
+        writer.flush().context("failed to flush prompt marker")?;
+
+        let mut input = String::new();
+        let bytes = reader
+            .read_line(&mut input)
+            .with_context(|| format!("failed to read selection for {}", phase.slug()))?;
+        if bytes == 0 {
+            bail!(
+                "interactive selection ended before {} was chosen",
+                phase.slug()
+            );
+        }
+
+        match input.trim().to_ascii_lowercase().as_str() {
+            "1" | "copilot" => return Ok(AgentKind::Copilot),
+            "2" | "claude" => return Ok(AgentKind::Claude),
+            _ => {
+                writeln!(writer, "Please choose 1/Copilot or 2/Claude.")
+                    .context("failed to write validation message")?;
+                writer
+                    .flush()
+                    .context("failed to flush validation message")?;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn rejects_non_text_task_files() {
         let err = validate_task_file(Path::new("task.json")).unwrap_err();
         assert!(err.to_string().contains(".md or .txt"));
+    }
+
+    #[test]
+    fn parses_agent_selection_prompt_answers() {
+        let mut input = Cursor::new("1\n2\n2\n1\n");
+        let mut output = Vec::new();
+
+        let selection = prompt_for_agent_selection(&mut input, &mut output).unwrap();
+
+        assert_eq!(selection.prospect1, AgentKind::Copilot);
+        assert_eq!(selection.prospect2, AgentKind::Claude);
+        assert_eq!(selection.synthesis, AgentKind::Claude);
+        assert_eq!(selection.implementation, AgentKind::Copilot);
     }
 }

@@ -19,8 +19,8 @@ pub struct PromptContext {
     pub task_content: String,
     pub workspace_dir: PathBuf,
     pub target_output_path: PathBuf,
-    pub copilot_proposal_path: PathBuf,
-    pub claude_proposal_path: PathBuf,
+    pub prospect1_path: PathBuf,
+    pub prospect2_path: PathBuf,
     pub plan_path: PathBuf,
 }
 
@@ -39,9 +39,9 @@ impl PromptTemplates {
 
 pub fn render_prompt(phase: Phase, templates: &PromptTemplates, context: &PromptContext) -> String {
     let template = match phase {
-        Phase::BrainstormCopilot | Phase::BrainstormClaude => &templates.brainstorm,
-        Phase::SynthesisClaude => &templates.synthesis,
-        Phase::ImplementationCopilot => &templates.implementation,
+        Phase::Prospect1 | Phase::Prospect2 => &templates.brainstorm,
+        Phase::Synthesis => &templates.synthesis,
+        Phase::Implementation => &templates.implementation,
     };
 
     let with_placeholders = replace_placeholders(template, context);
@@ -57,13 +57,15 @@ fn replace_placeholders(template: &str, context: &PromptContext) -> String {
             "{{TARGET_OUTPUT_PATH}}",
             &display_path(&context.target_output_path),
         )
+        .replace("{{PROSPECT1_PATH}}", &display_path(&context.prospect1_path))
+        .replace("{{PROSPECT2_PATH}}", &display_path(&context.prospect2_path))
         .replace(
             "{{COPILOT_PROPOSAL_PATH}}",
-            &display_path(&context.copilot_proposal_path),
+            &display_path(&context.prospect1_path),
         )
         .replace(
             "{{CLAUDE_PROPOSAL_PATH}}",
-            &display_path(&context.claude_proposal_path),
+            &display_path(&context.prospect2_path),
         )
         .replace("{{PLAN_PATH}}", &display_path(&context.plan_path))
 }
@@ -80,27 +82,27 @@ fn runtime_block(phase: Phase, context: &PromptContext) -> String {
     ];
 
     match phase {
-        Phase::BrainstormCopilot | Phase::BrainstormClaude => {
+        Phase::Prospect1 | Phase::Prospect2 => {
             lines.push(format!(
                 "Your response will be captured and saved to: {}",
                 display_path(&context.target_output_path)
             ));
         }
-        Phase::SynthesisClaude => {
+        Phase::Synthesis => {
             lines.push(format!(
-                "Copilot proposal path: {}",
-                display_path(&context.copilot_proposal_path)
+                "Prospect1 path: {}",
+                display_path(&context.prospect1_path)
             ));
             lines.push(format!(
-                "Claude proposal path: {}",
-                display_path(&context.claude_proposal_path)
+                "Prospect2 path: {}",
+                display_path(&context.prospect2_path)
             ));
             lines.push(format!(
                 "Write only the final consolidated plan. The orchestrator will save your response to: {}",
                 display_path(&context.target_output_path)
             ));
         }
-        Phase::ImplementationCopilot => {
+        Phase::Implementation => {
             lines.push(format!(
                 "Approved plan path: {}",
                 display_path(&context.plan_path)
@@ -136,12 +138,12 @@ mod tests {
             task_content: "Build something".to_string(),
             workspace_dir: PathBuf::from("/tmp/workspace"),
             target_output_path: PathBuf::from("/tmp/out.md"),
-            copilot_proposal_path: PathBuf::from("/tmp/copilot.md"),
-            claude_proposal_path: PathBuf::from("/tmp/claude.md"),
+            prospect1_path: PathBuf::from("/tmp/prospect1.md"),
+            prospect2_path: PathBuf::from("/tmp/prospect2.md"),
             plan_path: PathBuf::from("/tmp/plan.md"),
         };
 
-        let rendered = render_prompt(Phase::BrainstormCopilot, &templates, &context);
+        let rendered = render_prompt(Phase::Prospect1, &templates, &context);
 
         assert!(rendered.contains("/tmp/task.md"));
         assert!(rendered.contains("Build something"));

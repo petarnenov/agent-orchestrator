@@ -35,54 +35,56 @@ impl AgentKind {
     }
 }
 
+impl std::fmt::Display for AgentKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Copilot => write!(f, "Copilot"),
+            Self::Claude => write!(f, "Claude"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
-    BrainstormCopilot,
-    BrainstormClaude,
-    SynthesisClaude,
-    ImplementationCopilot,
+    Prospect1,
+    Prospect2,
+    Synthesis,
+    Implementation,
 }
 
 impl Phase {
     pub const ALL: [Phase; 4] = [
-        Phase::BrainstormCopilot,
-        Phase::BrainstormClaude,
-        Phase::SynthesisClaude,
-        Phase::ImplementationCopilot,
+        Phase::Prospect1,
+        Phase::Prospect2,
+        Phase::Synthesis,
+        Phase::Implementation,
     ];
-
-    pub fn agent(self) -> AgentKind {
-        match self {
-            Self::BrainstormCopilot | Self::ImplementationCopilot => AgentKind::Copilot,
-            Self::BrainstormClaude | Self::SynthesisClaude => AgentKind::Claude,
-        }
-    }
 
     pub fn slug(self) -> &'static str {
         match self {
-            Self::BrainstormCopilot => "brainstorm-copilot",
-            Self::BrainstormClaude => "brainstorm-claude",
-            Self::SynthesisClaude => "synthesis-claude",
-            Self::ImplementationCopilot => "implementation-copilot",
+            Self::Prospect1 => "prospect1",
+            Self::Prospect2 => "prospect2",
+            Self::Synthesis => "synthesis",
+            Self::Implementation => "implementation",
         }
     }
 
     pub fn title(self) -> &'static str {
         match self {
-            Self::BrainstormCopilot => "Copilot brainstorming",
-            Self::BrainstormClaude => "Claude brainstorming",
-            Self::SynthesisClaude => "Claude synthesis",
-            Self::ImplementationCopilot => "Copilot implementation",
+            Self::Prospect1 => "Prospect 1",
+            Self::Prospect2 => "Prospect 2",
+            Self::Synthesis => "Synthesis",
+            Self::Implementation => "Implementation",
         }
     }
 
     pub fn output_description(self) -> &'static str {
         match self {
-            Self::BrainstormCopilot => "proposal",
-            Self::BrainstormClaude => "proposal",
-            Self::SynthesisClaude => "plan",
-            Self::ImplementationCopilot => "implementation report",
+            Self::Prospect1 => "proposal",
+            Self::Prospect2 => "proposal",
+            Self::Synthesis => "plan",
+            Self::Implementation => "implementation report",
         }
     }
 
@@ -92,6 +94,34 @@ impl Phase {
             .position(|candidate| *candidate == self)
             .map(|index| index + 1)
             .unwrap_or(0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AgentSelection {
+    pub prospect1: AgentKind,
+    pub prospect2: AgentKind,
+    pub synthesis: AgentKind,
+    pub implementation: AgentKind,
+}
+
+impl AgentSelection {
+    pub fn legacy_default() -> Self {
+        Self {
+            prospect1: AgentKind::Copilot,
+            prospect2: AgentKind::Claude,
+            synthesis: AgentKind::Claude,
+            implementation: AgentKind::Copilot,
+        }
+    }
+
+    pub fn for_phase(self, phase: Phase) -> AgentKind {
+        match phase {
+            Phase::Prospect1 => self.prospect1,
+            Phase::Prospect2 => self.prospect2,
+            Phase::Synthesis => self.synthesis,
+            Phase::Implementation => self.implementation,
+        }
     }
 }
 

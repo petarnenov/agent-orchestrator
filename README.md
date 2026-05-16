@@ -4,12 +4,17 @@ CLI orchestrator for staged Copilot and Claude execution pipelines.
 
 ## What it does
 
-`agent-orchestrator` reads a task from a `.md` or `.txt` file and runs a fixed pipeline:
+`agent-orchestrator` reads a task from a `.md` or `.txt` file and runs a staged pipeline:
 
-1. Copilot brainstorming
-2. Claude brainstorming
-3. Claude synthesis
-4. Copilot implementation
+1. prospect1
+2. prospect2
+3. synthesis
+4. implementation
+
+At startup, the CLI prompts you to choose which agent to use for each stage (`Copilot` or `Claude`).
+
+If the tool is started non-interactively, it falls back to the legacy default mapping:
+`prospect1=Copilot`, `prospect2=Claude`, `synthesis=Claude`, `implementation=Copilot`.
 
 It persists prompts, outputs, logs, progress, and a structured `run-summary.json`.
 
