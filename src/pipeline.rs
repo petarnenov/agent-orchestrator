@@ -1,17 +1,21 @@
 use std::fs;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use chrono::Utc;
 
 use crate::artifacts::{RunArtifacts, RunSummary};
 use crate::cli::ResolvedCli;
+use crate::progress::{NoopProgressReporter, ProgressEvent, ProgressReporter};
 use crate::prompt::{PromptContext, PromptTemplates, render_prompt};
 use crate::runner::{AgentRequest, AgentRunner, Phase};
 
 pub struct Pipeline<'a> {
     copilot: &'a dyn AgentRunner,
     claude: &'a dyn AgentRunner,
+    heartbeat_interval: Duration,
 }
 
 #[derive(Clone)]
@@ -27,7 +31,19 @@ struct PhaseExecution {
 
 impl<'a> Pipeline<'a> {
     pub fn new(copilot: &'a dyn AgentRunner, claude: &'a dyn AgentRunner) -> Self {
-        Self { copilot, claude }
+        Self::with_heartbeat_interval(copilot, claude, Duration::from_secs(5))
+    }
+
+    pub fn with_heartbeat_interval(
+        copilot: &'a dyn AgentRunner,
+        claude: &'a dyn AgentRunner,
+        heartbeat_interval: Duration,
+    ) -> Self {
+        Self {
+            copilot,
+            claude,
+            heartbeat_interval,
+        }
     }
 
     pub fn execute(&self, cli: &ResolvedCli) -> Result<RunSummary> {
@@ -50,6 +66,7 @@ impl<'a> Pipeline<'a> {
             cli.working_dir.clone(),
             artifacts.output_dir.clone(),
         );
+        summary.heartbeat_interval_seconds = self.heartbeat_interval.as_secs();
         artifacts.persist_summary(&summary)?;
         reporter.report(ProgressEvent::RunStarted {
             task_file: cli.task_file.clone(),
@@ -146,11 +163,26 @@ impl<'a> Pipeline<'a> {
         let execution =
             self.prepare_phase_execution(cli, task_content, templates, artifacts, phase)?;
         self.start_phase(&execution, summary, artifacts, reporter)?;
-        let result = self
-            .runner_for(phase)
-            .run(&execution.request)
-            .with_context(|| format!("{} phase failed to start", phase.slug()));
-        self.finalize_phase_execution(&execution, result, summary, artifacts, reporter)
+        summary.update_phase_activity(phase, "agent process started");
+        artifacts.persist_summary(summary)?;
+
+        thread::scope(|scope| {
+            let (sender, receiver) = mpsc::channel();
+            let runner = self.runner_for(phase);
+            let request = execution.request.clone();
+            scope.spawn(move || {
+                let result = runner
+                    .run(&request)
+                    .with_context(|| format!("{} phase failed to start", phase.slug()));
+                let _ = sender.send(result);
+            });
+
+            summary.update_phase_activity(phase, "waiting for agent output");
+            artifacts.persist_summary(summary)?;
+
+            let result = self.wait_for_single_phase_result(&receiver, summary, reporter);
+            self.finalize_phase_execution(&execution, result, summary, artifacts, reporter)
+        })
     }
 
     fn runner_for(&self, phase: Phase) -> &dyn AgentRunner {
@@ -179,7 +211,9 @@ impl<'a> Pipeline<'a> {
 
         for execution in &executions {
             self.start_phase(execution, summary, artifacts, reporter)?;
+            summary.update_phase_activity(execution.phase, "agent process started");
         }
+        artifacts.persist_summary(summary)?;
 
         let (sender, receiver) = mpsc::channel();
         thread::scope(|scope| {
@@ -196,13 +230,18 @@ impl<'a> Pipeline<'a> {
                 });
             }
 
+            for execution in &executions {
+                summary.update_phase_activity(execution.phase, "waiting for agent output");
+            }
+            artifacts.persist_summary(summary)?;
+
             drop(sender);
 
             let mut first_error = None;
-            for _ in 0..executions.len() {
-                let (phase, result) = receiver
-                    .recv()
-                    .context("parallel phase worker exited before reporting a result")?;
+            let mut remaining_results = executions.len();
+            while remaining_results > 0 {
+                let (phase, result) =
+                    self.wait_for_parallel_phase_results(&receiver, summary, reporter)?;
                 let execution = executions
                     .iter()
                     .find(|execution| execution.phase == phase)
@@ -214,6 +253,7 @@ impl<'a> Pipeline<'a> {
                         first_error = Some(error);
                     }
                 }
+                remaining_results -= 1;
             }
 
             if let Some(error) = first_error {
@@ -249,7 +289,7 @@ impl<'a> Pipeline<'a> {
 
         Ok(PhaseExecution {
             phase,
-            phase_index: phase_position(phase),
+            phase_index: phase.position(),
             request: AgentRequest {
                 phase,
                 prompt,
@@ -277,6 +317,7 @@ impl<'a> Pipeline<'a> {
             execution.stdout_log.clone(),
             execution.stderr_log.clone(),
         );
+        summary.update_phase_activity(execution.phase, "prompt prepared");
         artifacts.persist_summary(summary)?;
         reporter.report(ProgressEvent::PhaseStarted {
             phase: execution.phase,
@@ -297,6 +338,8 @@ impl<'a> Pipeline<'a> {
     ) -> Result<()> {
         match result {
             Ok(result) => {
+                summary.update_phase_activity(execution.phase, "agent output received");
+                artifacts.persist_summary(summary)?;
                 fs::write(&execution.stdout_log, &result.stdout).with_context(|| {
                     format!("failed to write {}", execution.stdout_log.display())
                 })?;
@@ -341,6 +384,7 @@ impl<'a> Pipeline<'a> {
                 fs::write(&execution.output_path, trimmed).with_context(|| {
                     format!("failed to write {}", execution.output_path.display())
                 })?;
+                summary.update_phase_activity(execution.phase, "artifact written");
                 summary.complete_phase(execution.phase, result.exit_code);
                 artifacts.persist_summary(summary)?;
                 reporter.report(ProgressEvent::PhaseCompleted {
@@ -371,133 +415,54 @@ impl<'a> Pipeline<'a> {
             }
         }
     }
-}
 
-pub trait ProgressReporter {
-    fn report(&mut self, event: ProgressEvent);
-}
-
-pub struct NoopProgressReporter;
-
-impl ProgressReporter for NoopProgressReporter {
-    fn report(&mut self, _event: ProgressEvent) {}
-}
-
-pub struct ConsoleProgressReporter;
-
-impl ProgressReporter for ConsoleProgressReporter {
-    fn report(&mut self, event: ProgressEvent) {
-        match event {
-            ProgressEvent::RunStarted {
-                task_file,
-                output_dir,
-                total_phases,
-            } => {
-                println!("Starting task: {}", task_file.display());
-                println!("Artifacts: {}", output_dir.display());
-                println!("Progress: 0% (0/{total_phases})");
-            }
-            ProgressEvent::PhaseStarted {
-                phase,
-                phase_index,
-                total_phases,
-                progress_percent,
-            } => {
-                println!(
-                    "[{phase_index}/{total_phases} | {progress_percent}%] Running {}...",
-                    phase.title()
-                );
-            }
-            ProgressEvent::PhaseCompleted {
-                phase,
-                phase_index,
-                total_phases,
-                progress_percent,
-                output_path,
-            } => {
-                println!(
-                    "[{phase_index}/{total_phases} | {progress_percent}%] Completed {} -> {} ({})",
-                    phase.title(),
-                    output_path.display(),
-                    phase.output_description()
-                );
-            }
-            ProgressEvent::PhaseFailed {
-                phase,
-                phase_index,
-                total_phases,
-                progress_percent,
-                error,
-            } => {
-                eprintln!(
-                    "[{phase_index}/{total_phases} | {progress_percent}%] Failed {}: {error}",
-                    phase.title()
-                );
-            }
-            ProgressEvent::RunCompleted {
-                output_dir,
-                completed_phases,
-                total_phases,
-            } => {
-                println!(
-                    "Done. Progress: 100% ({completed_phases}/{total_phases}). Artifacts: {}",
-                    output_dir.display()
-                );
-            }
-            ProgressEvent::RunFailed {
-                output_dir,
-                completed_phases,
-                total_phases,
-                error,
-            } => {
-                eprintln!(
-                    "Failed. Progress: {}% ({completed_phases}/{total_phases}). Artifacts: {}. {}",
-                    progress_percent(completed_phases, total_phases),
-                    output_dir.display(),
-                    error
-                );
+    fn wait_for_single_phase_result(
+        &self,
+        receiver: &mpsc::Receiver<Result<crate::runner::AgentResult>>,
+        summary: &RunSummary,
+        reporter: &mut dyn ProgressReporter,
+    ) -> Result<crate::runner::AgentResult> {
+        loop {
+            match receiver.recv_timeout(self.heartbeat_interval) {
+                Ok(result) => return result,
+                Err(RecvTimeoutError::Timeout) => self.emit_heartbeat(summary, reporter),
+                Err(RecvTimeoutError::Disconnected) => {
+                    bail!("phase worker exited before reporting a result")
+                }
             }
         }
     }
-}
 
-pub enum ProgressEvent {
-    RunStarted {
-        task_file: std::path::PathBuf,
-        output_dir: std::path::PathBuf,
-        total_phases: usize,
-    },
-    PhaseStarted {
-        phase: Phase,
-        phase_index: usize,
-        total_phases: usize,
-        progress_percent: u8,
-    },
-    PhaseCompleted {
-        phase: Phase,
-        phase_index: usize,
-        total_phases: usize,
-        progress_percent: u8,
-        output_path: std::path::PathBuf,
-    },
-    PhaseFailed {
-        phase: Phase,
-        phase_index: usize,
-        total_phases: usize,
-        progress_percent: u8,
-        error: String,
-    },
-    RunCompleted {
-        output_dir: std::path::PathBuf,
-        completed_phases: usize,
-        total_phases: usize,
-    },
-    RunFailed {
-        output_dir: std::path::PathBuf,
-        completed_phases: usize,
-        total_phases: usize,
-        error: String,
-    },
+    fn wait_for_parallel_phase_results(
+        &self,
+        receiver: &mpsc::Receiver<(Phase, Result<crate::runner::AgentResult>)>,
+        summary: &RunSummary,
+        reporter: &mut dyn ProgressReporter,
+    ) -> Result<(Phase, Result<crate::runner::AgentResult>)> {
+        loop {
+            match receiver.recv_timeout(self.heartbeat_interval) {
+                Ok(result) => return Ok(result),
+                Err(RecvTimeoutError::Timeout) => self.emit_heartbeat(summary, reporter),
+                Err(RecvTimeoutError::Disconnected) => {
+                    bail!("parallel phase worker exited before reporting a result")
+                }
+            }
+        }
+    }
+
+    fn emit_heartbeat(&self, summary: &RunSummary, reporter: &mut dyn ProgressReporter) {
+        let active_phases = summary.active_phase_statuses(Utc::now());
+        if active_phases.is_empty() {
+            return;
+        }
+
+        reporter.report(ProgressEvent::Heartbeat {
+            completed_phases: summary.completed_phases,
+            total_phases: summary.total_phases,
+            progress_percent: summary.progress_percent,
+            active_phases,
+        });
+    }
 }
 
 fn format_phase_error(phase: Phase, stdout: &str, stderr: &str, exit_code: Option<i32>) -> String {
@@ -518,22 +483,6 @@ fn excerpt(content: &str) -> String {
         "<empty>".to_string()
     } else {
         trimmed.chars().take(240).collect()
-    }
-}
-
-fn phase_position(phase: Phase) -> usize {
-    Phase::ALL
-        .iter()
-        .position(|candidate| *candidate == phase)
-        .map(|index| index + 1)
-        .unwrap_or(0)
-}
-
-fn progress_percent(completed_phases: usize, total_phases: usize) -> u8 {
-    if total_phases == 0 {
-        0
-    } else {
-        ((completed_phases * 100) / total_phases) as u8
     }
 }
 
@@ -589,6 +538,7 @@ mod tests {
             let label = match event {
                 ProgressEvent::RunStarted { .. } => "run_started",
                 ProgressEvent::PhaseStarted { phase, .. } => phase.slug(),
+                ProgressEvent::Heartbeat { .. } => "heartbeat",
                 ProgressEvent::PhaseCompleted { .. } => "phase_completed",
                 ProgressEvent::PhaseFailed { .. } => "phase_failed",
                 ProgressEvent::RunCompleted { .. } => "run_completed",
@@ -694,6 +644,7 @@ mod tests {
         assert_eq!(summary.phases.len(), 4);
         assert_eq!(summary.completed_phases, 4);
         assert!(summary.current_phases.is_empty());
+        assert_eq!(summary.heartbeat_interval_seconds, 5);
         assert_eq!(summary.progress_percent, 100);
     }
 
@@ -800,6 +751,76 @@ mod tests {
         assert!(events.iter().any(|event| event == "run_started"));
         assert!(events.iter().any(|event| event == "run_completed"));
         assert!(events.iter().any(|event| event == "brainstorm-copilot"));
+    }
+
+    #[test]
+    fn pipeline_emits_heartbeat_for_long_running_phases() {
+        let temp = tempdir().unwrap();
+        let task_file = temp.path().join("task.md");
+        let brainstorm = temp.path().join("prompt-brainstorm.md");
+        let synthesis = temp.path().join("prompt-synthesis.md");
+        let implementation = temp.path().join("prompt-implementation.md");
+
+        fs::write(&task_file, "Build a CLI orchestrator").unwrap();
+        fs::write(&brainstorm, "Brainstorm {{TASK_CONTENT}}").unwrap();
+        fs::write(&synthesis, "Synthesize").unwrap();
+        fs::write(&implementation, "Implement").unwrap();
+
+        let cli = ResolvedCli {
+            task_file,
+            working_dir: temp.path().to_path_buf(),
+            output_root: temp.path().join("runs"),
+            prompt_paths: PromptPaths {
+                brainstorm,
+                synthesis,
+                implementation,
+            },
+            copilot: AgentCliConfig::new("copilot".to_string(), Vec::new()),
+            claude: AgentCliConfig::new("claude".to_string(), Vec::new()),
+            run_name: None,
+        };
+        let copilot = DelayedRunner::new(
+            Duration::from_millis(60),
+            vec![
+                AgentResult {
+                    stdout: "copilot proposal".to_string(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                    success: true,
+                },
+                AgentResult {
+                    stdout: "implementation summary".to_string(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                    success: true,
+                },
+            ],
+        );
+        let claude = DelayedRunner::new(
+            Duration::from_millis(60),
+            vec![
+                AgentResult {
+                    stdout: "claude proposal".to_string(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                    success: true,
+                },
+                AgentResult {
+                    stdout: "final plan".to_string(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                    success: true,
+                },
+            ],
+        );
+        let pipeline =
+            Pipeline::with_heartbeat_interval(&copilot, &claude, Duration::from_millis(20));
+        let mut reporter = RecordingReporter::new();
+
+        pipeline.execute_with_reporter(&cli, &mut reporter).unwrap();
+
+        let events = reporter.events.lock().unwrap();
+        assert!(events.iter().any(|event| event == "heartbeat"));
     }
 
     #[test]

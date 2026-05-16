@@ -87,6 +87,7 @@ pub struct RunSummary {
     pub task_file: PathBuf,
     pub working_dir: PathBuf,
     pub output_dir: PathBuf,
+    pub heartbeat_interval_seconds: u64,
     pub total_phases: usize,
     pub completed_phases: usize,
     pub current_phase: Option<Phase>,
@@ -110,6 +111,7 @@ impl RunSummary {
             task_file,
             working_dir,
             output_dir,
+            heartbeat_interval_seconds: 5,
             total_phases: Phase::ALL.len(),
             completed_phases: 0,
             current_phase: None,
@@ -139,10 +141,19 @@ impl RunSummary {
             stderr_log,
             exit_code: None,
             started_at: Utc::now(),
+            last_activity_at: None,
+            last_activity_message: None,
             finished_at: None,
             error: None,
         });
         self.refresh_progress();
+    }
+
+    pub fn update_phase_activity(&mut self, phase: Phase, message: impl Into<String>) {
+        if let Some(record) = self.phases.iter_mut().find(|record| record.phase == phase) {
+            record.last_activity_at = Some(Utc::now());
+            record.last_activity_message = Some(message.into());
+        }
     }
 
     pub fn complete_phase(&mut self, phase: Phase, exit_code: Option<i32>) {
@@ -204,6 +215,31 @@ impl RunSummary {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ActivePhaseStatus {
+    pub phase: Phase,
+    pub elapsed_seconds: u64,
+    pub last_activity_seconds: Option<u64>,
+    pub last_activity_message: Option<String>,
+}
+
+impl RunSummary {
+    pub fn active_phase_statuses(&self, now: DateTime<Utc>) -> Vec<ActivePhaseStatus> {
+        self.phases
+            .iter()
+            .filter(|phase| matches!(phase.status, PhaseStatus::Running))
+            .map(|phase| ActivePhaseStatus {
+                phase: phase.phase,
+                elapsed_seconds: elapsed_seconds(phase.started_at, now),
+                last_activity_seconds: phase
+                    .last_activity_at
+                    .map(|last_activity| elapsed_seconds(last_activity, now)),
+                last_activity_message: phase.last_activity_message.clone(),
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PhaseStatus {
@@ -223,8 +259,14 @@ pub struct PhaseSummary {
     pub stderr_log: PathBuf,
     pub exit_code: Option<i32>,
     pub started_at: DateTime<Utc>,
+    pub last_activity_at: Option<DateTime<Utc>>,
+    pub last_activity_message: Option<String>,
     pub finished_at: Option<DateTime<Utc>>,
     pub error: Option<String>,
+}
+
+fn elapsed_seconds(started_at: DateTime<Utc>, now: DateTime<Utc>) -> u64 {
+    now.signed_duration_since(started_at).num_seconds().max(0) as u64
 }
 
 fn sanitize_label(input: &str) -> String {

@@ -2,7 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 
 use agent_orchestrator::cli::Cli;
-use agent_orchestrator::pipeline::{ConsoleProgressReporter, Pipeline};
+use agent_orchestrator::pipeline::Pipeline;
+use agent_orchestrator::progress::ConsoleProgressReporter;
 use agent_orchestrator::runner::{ClaudeCliRunner, CopilotCliRunner};
 
 fn main() -> Result<()> {

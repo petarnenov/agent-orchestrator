@@ -85,6 +85,14 @@ impl Phase {
             Self::ImplementationCopilot => "implementation report",
         }
     }
+
+    pub fn position(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|candidate| *candidate == self)
+            .map(|index| index + 1)
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone)]
