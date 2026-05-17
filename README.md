@@ -3,6 +3,7 @@
 CLI orchestrator for staged Copilot and Claude execution pipelines.
 
 The three default prompt templates are bundled into the compiled binary. If you do not pass explicit prompt template flags, the built-in prompts are used automatically.
+For tasks that change an existing git repository, the bundled prompts now enforce a default workflow: create a new descriptive branch before implementation work and finish by opening a pull request to `main` from that branch.
 
 ## What it does
 

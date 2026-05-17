@@ -15,6 +15,8 @@ Instructions:
 3. Do not assume the other agent thinks like you.
 4. Produce your own best proposal from scratch.
 5. Optimize for correctness, maintainability, scalability, developer experience, and production readiness.
+6. If the task is about changing, fixing, or improving an existing git repository, treat this workflow as mandatory: create a new descriptive branch aligned with the task before implementation work begins, and complete the work through a pull request to `main` from that branch.
+7. Reflect that workflow explicitly in your proposal whenever it applies.
 
 Your output must be structured in the following sections:
 
