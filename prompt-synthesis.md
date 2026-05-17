@@ -24,6 +24,7 @@ Instructions:
 5. Do not leave important architectural choices ambiguous.
 6. Do not write application code.
 7. Write only the final consolidated plan.
+8. If the task is about changing, fixing, or improving an existing git repository, the final plan must explicitly require a new descriptive branch before implementation work starts and a pull request to `main` from that branch after implementation is complete.
 
 The final plan must contain exactly these sections:
 

@@ -187,6 +187,19 @@ mod tests {
     }
 
     #[test]
+    fn bundled_prompts_include_existing_repo_git_workflow_rules() {
+        assert!(BUILTIN_BRAINSTORM_PROMPT.contains("existing git repository"));
+        assert!(BUILTIN_BRAINSTORM_PROMPT.contains("pull request to `main`"));
+
+        assert!(BUILTIN_SYNTHESIS_PROMPT.contains("existing git repository"));
+        assert!(BUILTIN_SYNTHESIS_PROMPT.contains("pull request to `main`"));
+
+        assert!(BUILTIN_IMPLEMENTATION_PROMPT.contains("create a new descriptive branch"));
+        assert!(BUILTIN_IMPLEMENTATION_PROMPT.contains("do not implement directly on `main`"));
+        assert!(BUILTIN_IMPLEMENTATION_PROMPT.contains("open a pull request to `main`"));
+    }
+
+    #[test]
     fn prefers_explicit_prompt_files_over_bundled_defaults() {
         let temp = tempdir().unwrap();
         let brainstorm = temp.path().join("brainstorm.md");
