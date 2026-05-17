@@ -1,19 +1,38 @@
 use anyhow::Result;
 use clap::Parser;
 
-use agent_orchestrator::cli::Cli;
+use agent_orchestrator::cli::{Cli, ResolvedCommand};
 use agent_orchestrator::pipeline::Pipeline;
 use agent_orchestrator::progress::ConsoleProgressReporter;
+use agent_orchestrator::prompt::PromptTemplates;
 use agent_orchestrator::runner::{ClaudeCliRunner, CopilotCliRunner};
 
 fn main() -> Result<()> {
-    let cli = Cli::parse().resolve()?;
-    let copilot = CopilotCliRunner::new(cli.copilot.clone());
-    let claude = ClaudeCliRunner::new(cli.claude.clone());
-    let pipeline = Pipeline::new(&copilot, &claude);
-    let mut reporter = ConsoleProgressReporter;
+    match Cli::parse().resolve()? {
+        ResolvedCommand::Prompts => {
+            print_bundled_prompts();
+            Ok(())
+        }
+        ResolvedCommand::Run(cli) => {
+            let copilot = CopilotCliRunner::new(cli.copilot.clone());
+            let claude = ClaudeCliRunner::new(cli.claude.clone());
+            let pipeline = Pipeline::new(&copilot, &claude);
+            let mut reporter = ConsoleProgressReporter;
 
-    pipeline.execute_with_reporter(&cli, &mut reporter)?;
+            pipeline.execute_with_reporter(&cli, &mut reporter)?;
 
-    Ok(())
+            Ok(())
+        }
+    }
+}
+
+fn print_bundled_prompts() {
+    let prompts = PromptTemplates::bundled();
+    print_section("brainstorm", &prompts.brainstorm);
+    print_section("synthesis", &prompts.synthesis);
+    print_section("implementation", &prompts.implementation);
+}
+
+fn print_section(name: &str, content: &str) {
+    println!("=== {name} ===\n{content}");
 }

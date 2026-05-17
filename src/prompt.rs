@@ -6,6 +6,10 @@ use anyhow::{Context, Result};
 use crate::cli::PromptPaths;
 use crate::runner::Phase;
 
+pub const BUILTIN_BRAINSTORM_PROMPT: &str = include_str!("../prompt-brainstorm.md");
+pub const BUILTIN_SYNTHESIS_PROMPT: &str = include_str!("../prompt-synthesis.md");
+pub const BUILTIN_IMPLEMENTATION_PROMPT: &str = include_str!("../prompt-implementation.md");
+
 #[derive(Debug, Clone)]
 pub struct PromptTemplates {
     pub brainstorm: String,
@@ -25,15 +29,31 @@ pub struct PromptContext {
 }
 
 impl PromptTemplates {
+    pub fn bundled() -> Self {
+        Self {
+            brainstorm: BUILTIN_BRAINSTORM_PROMPT.to_string(),
+            synthesis: BUILTIN_SYNTHESIS_PROMPT.to_string(),
+            implementation: BUILTIN_IMPLEMENTATION_PROMPT.to_string(),
+        }
+    }
+
     pub fn load(paths: &PromptPaths) -> Result<Self> {
+        let bundled = Self::bundled();
+
         Ok(Self {
-            brainstorm: fs::read_to_string(&paths.brainstorm)
-                .with_context(|| format!("failed to read {}", paths.brainstorm.display()))?,
-            synthesis: fs::read_to_string(&paths.synthesis)
-                .with_context(|| format!("failed to read {}", paths.synthesis.display()))?,
-            implementation: fs::read_to_string(&paths.implementation)
-                .with_context(|| format!("failed to read {}", paths.implementation.display()))?,
+            brainstorm: load_prompt(paths.brainstorm.as_deref(), &bundled.brainstorm)?,
+            synthesis: load_prompt(paths.synthesis.as_deref(), &bundled.synthesis)?,
+            implementation: load_prompt(paths.implementation.as_deref(), &bundled.implementation)?,
         })
+    }
+}
+
+fn load_prompt(path: Option<&Path>, bundled: &str) -> Result<String> {
+    match path {
+        Some(path) => {
+            fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))
+        }
+        None => Ok(bundled.to_string()),
     }
 }
 
@@ -124,6 +144,7 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn renders_placeholders_and_runtime_context() {
@@ -149,5 +170,41 @@ mod tests {
         assert!(rendered.contains("Build something"));
         assert!(rendered.contains("/tmp/out.md"));
         assert!(rendered.contains("# Runtime Context"));
+    }
+
+    #[test]
+    fn loads_bundled_prompts_when_paths_are_missing() {
+        let templates = PromptTemplates::load(&PromptPaths {
+            brainstorm: None,
+            synthesis: None,
+            implementation: None,
+        })
+        .unwrap();
+
+        assert_eq!(templates.brainstorm, BUILTIN_BRAINSTORM_PROMPT);
+        assert_eq!(templates.synthesis, BUILTIN_SYNTHESIS_PROMPT);
+        assert_eq!(templates.implementation, BUILTIN_IMPLEMENTATION_PROMPT);
+    }
+
+    #[test]
+    fn prefers_explicit_prompt_files_over_bundled_defaults() {
+        let temp = tempdir().unwrap();
+        let brainstorm = temp.path().join("brainstorm.md");
+        let synthesis = temp.path().join("synthesis.md");
+        let implementation = temp.path().join("implementation.md");
+        fs::write(&brainstorm, "custom brainstorm").unwrap();
+        fs::write(&synthesis, "custom synthesis").unwrap();
+        fs::write(&implementation, "custom implementation").unwrap();
+
+        let templates = PromptTemplates::load(&PromptPaths {
+            brainstorm: Some(brainstorm),
+            synthesis: Some(synthesis),
+            implementation: Some(implementation),
+        })
+        .unwrap();
+
+        assert_eq!(templates.brainstorm, "custom brainstorm");
+        assert_eq!(templates.synthesis, "custom synthesis");
+        assert_eq!(templates.implementation, "custom implementation");
     }
 }

@@ -2,6 +2,8 @@
 
 CLI orchestrator for staged Copilot and Claude execution pipelines.
 
+The three default prompt templates are bundled into the compiled binary. If you do not pass explicit prompt template flags, the built-in prompts are used automatically.
+
 ## What it does
 
 `agent-orchestrator` reads a task from a `.md` or `.txt` file and runs a staged pipeline:
@@ -34,6 +36,12 @@ Run prompts, logs, prospect outputs, the implementation report, and `run-summary
 cargo run -- sample-task.md --working-dir .
 ```
 
+Show the bundled prompt templates:
+
+```bash
+cargo run -- prompts
+```
+
 Or with the compiled debug binary:
 
 ```bash
@@ -45,6 +53,22 @@ Or after a release build:
 ```bash
 cargo build --release
 ./target/release/agent-orchestrator sample-task.md --working-dir .
+```
+
+Print the bundled prompts from the compiled binary:
+
+```bash
+./target/release/agent-orchestrator prompts
+```
+
+To override any bundled prompt, pass one or more custom template files:
+
+```bash
+./target/release/agent-orchestrator sample-task.md \
+  --working-dir . \
+  --brainstorm-prompt ./my-brainstorm.md \
+  --synthesis-prompt ./my-synthesis.md \
+  --implementation-prompt ./my-implementation.md
 ```
 
 ## Homebrew
