@@ -20,7 +20,8 @@ dist_dir="${repo_root}/dists/${distribution}/${component}/binary-${arch}"
 mkdir -p "$pool_dir" "$dist_dir"
 cp "$deb_file" "$pool_dir/"
 
-dpkg-scanpackages --multiversion "$pool_dir" > "${dist_dir}/Packages"
+( cd "$repo_root" && dpkg-scanpackages --multiversion "pool/${component}/${package_name:0:1}/${package_name}" ) \
+  > "${dist_dir}/Packages"
 gzip -9 -c "${dist_dir}/Packages" > "${dist_dir}/Packages.gz"
 
 cat > "${repo_root}/apt-ftparchive.conf" <<EOF
