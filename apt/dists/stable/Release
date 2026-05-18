@@ -1,0 +1,24 @@
+Architectures: amd64
+Codename: stable
+Components: main
+Date: Mon, 18 May 2026 08:42:32 +0000
+Description: APT repository for agent-orchestrator
+Label: agent-orchestrator
+Origin: petarnenov
+Suite: stable
+MD5Sum:
+ 26b368a6ac9a327c71179f5c85a25f6d              203 Release
+ f3a1c17acd0c9243b74b80eb012f93f6              483 main/binary-amd64/Packages
+ 47c1e8de1addb2dd020b4351c17aac6a              362 main/binary-amd64/Packages.gz
+SHA1:
+ 2123e975db638e7b42b7849d191ac9e84cbae079              203 Release
+ 1045dea617610b684289a36df645490c5ffd8dd2              483 main/binary-amd64/Packages
+ 31fec4f72c23dd8b854d9a124f7cddb9d28d0f43              362 main/binary-amd64/Packages.gz
+SHA256:
+ 314a54f3134fe1f20af3559f80bf036991d41f74f6051db0b1fd77787a827993              203 Release
+ 5b6f99640baebd07d3b1afc7b8e0f8a123db641357c7b5d22a86e5cb233decf6              483 main/binary-amd64/Packages
+ 230db3b6defcb91ca96fb3c0e6afe59ff09d3c75792d14ee7baeaaa78caeda09              362 main/binary-amd64/Packages.gz
+SHA512:
+ 5d30f7c332cba85d564f568e4f5429238a9aeb7b1225b39357f9545712dd475e05367366b0e731fbe09a98c54b637254b16088a1b71ba053f2ad03248f2a3b13              203 Release
+ f457d438187618981653eab449c3902327ae536aa499a84868dc5693961faa1681bb42d5c6f1eabce82c2da0529a49db12b02154e62b62cad42c98b3643ae0d7              483 main/binary-amd64/Packages
+ 47022a1142bfc8b351d70ba20a25eac288c38cab97226ccabbba73b40557cf0a4d34d35bdb79f635f6ecf81401337d10fb87b59b12aa76809678ffe229df0050              362 main/binary-amd64/Packages.gz

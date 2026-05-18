@@ -1,0 +1,13 @@
+Package: agent-orchestrator
+Version: 0.1.8
+Architecture: amd64
+Maintainer: Petar Nenov <petarnenov@users.noreply.github.com>
+Filename: pool/main/a/agent-orchestrator/agent-orchestrator_0.1.8_amd64.deb
+Size: 502602
+MD5sum: 6875fd3df559309c06f5447c3d0b0b59
+SHA1: 7b3b36be58d28550528cff9489406724f482ad72
+SHA256: 951cd6eb16744f02e83c76c5a6fad01dddee0520d9b1893588ab8eeed110ea86
+Section: utils
+Priority: optional
+Description: CLI orchestrator for Copilot and Claude execution pipelines
+
